@@ -1,2 +1,3 @@
 # resistance-civil-protection
-Resistance binary that manages sending advisory emails to Squadmates.
+Resistance library that helps send advisory emails to Squadmates.
+
