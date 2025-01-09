@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::fs;
+use std::{env, fs};
 
 const CONFIG_PATH: &str = "/etc/resistance/civil-protection.conf";
 
@@ -17,6 +17,14 @@ const EMAIL_ADDRESS_REGEX: &str = r"\S+@\S+\.\S\S+";
 const EMAIL_IDENTITY_REGEX: &str = r"^.+ <\S+@\S+\.\S\S+>$";
 const EMAIL_IDENTITY_NAME_REGEX: &str = r"^.+ ";
 const EMAIL_IDENTITY_ADDRESS_REGEX: &str = r" <\S+@\S+\.\S\S+>$";
+
+fn get_config_path() -> String {
+    if env::var("RESISTANCE_DEBUG").is_ok() {
+        return "./resistance-conf/civil-protection.conf".into();
+    }
+
+    return CONFIG_PATH.into();
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Config {
@@ -147,7 +155,8 @@ impl CivilProtection {
     }
 
     pub fn save_config(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let config_path = Path::new(CONFIG_PATH);
+        let config_path_str = get_config_path();
+        let config_path = Path::new(config_path_str.as_str());
         match config_path.parent() {
             Some(parent) => {
                 fs::create_dir_all(parent)?;
@@ -168,7 +177,8 @@ impl CivilProtection {
 }
 
 fn load_config() -> Option<Config> {
-    let config_path = Path::new(CONFIG_PATH);
+    let config_path_str = get_config_path();
+    let config_path = Path::new(config_path_str.as_str());
     let config_bytes = match fs::read(config_path) {
         Ok(bytes) => bytes,
         Err(e) => {
