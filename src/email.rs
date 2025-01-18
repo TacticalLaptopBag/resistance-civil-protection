@@ -1,9 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Identity {
     pub name: String,
     pub email: String,
+}
+
+impl Identity {
+    pub fn eq(&self, other: &Identity) -> bool {
+        return self.name == other.name && self.email == other.email;
+    }
 }
 
 #[derive(Clone)]
