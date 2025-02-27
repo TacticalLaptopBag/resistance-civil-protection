@@ -26,8 +26,19 @@ pub enum Encryption {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Settings {
+pub enum Settings {
+    SMTP(SMTPSettings),
+    SENDMAIL(SendMailSettings),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SMTPSettings {
     pub server: String,
     pub encryption: Encryption,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SendMailSettings {
+
 }
 

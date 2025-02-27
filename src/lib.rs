@@ -1,5 +1,6 @@
 pub mod email;
 
+use email::{SMTPSettings, SendMailSettings};
 use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::transport::smtp::response::Response;
@@ -7,10 +8,13 @@ use lettre::{Message, SmtpTransport, Transport};
 use log::{debug, error};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use tempfile::tempfile;
 use std::fs::Permissions;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::{env, fs};
+use std::process::Command;
+use std::{env, fs, io};
 use base64::prelude::*;
 
 const CONFIG_PATH: &str = "/etc/resistance/civil-protection.conf";
@@ -66,27 +70,56 @@ impl CivilProtection {
     }
 
     pub fn login(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let conf = self.check_config()?;
+        
+        return match &conf.email_setting {
+            email::Settings::SMTP(smtp_settings) => {
+                let mailer = self.login_smtp(smtp_settings, &conf.email.email)?;
+                self.mailer = Some(mailer);
+                Ok(())
+            },
+            email::Settings::SENDMAIL(send_mail_settings) => {
+                self.login_sendmail(send_mail_settings)?;
+                Ok(())
+            },
+        }
+    }
+
+    fn login_smtp(&self, smtp_settings: &SMTPSettings, email: &String) -> Result<SmtpTransport, Box<dyn std::error::Error>> {
+        // TODO: Need to decrypt password
         let password_encoded = fs::read_to_string(get_pass_path())?;
         let password_bytes = BASE64_STANDARD_NO_PAD.decode(password_encoded)?;
         let password = String::from_utf8(password_bytes)?;
 
-        let conf = self.check_config()?;
         let credentials = Credentials::new(
-            conf.email.email.to_owned(),
+            email.to_owned(),
             password.to_owned(),
         );
 
-        let mail_builder = match conf.email_setting.encryption {
-            email::Encryption::TLS => SmtpTransport::relay(conf.email_setting.server.as_str()),
+        let mail_builder = match smtp_settings.encryption {
+            email::Encryption::TLS => SmtpTransport::relay(smtp_settings.server.as_str()),
             email::Encryption::STARTTLS => {
-                SmtpTransport::starttls_relay(conf.email_setting.server.as_str())
+                SmtpTransport::starttls_relay(smtp_settings.server.as_str())
             }
         };
         let mailer = mail_builder?.credentials(credentials).build();
         mailer.test_connection()?;
-        self.mailer = Some(mailer);
 
-        return Ok(());
+        return Ok(mailer);
+    }
+
+    fn login_sendmail(&self, _send_mail_settings: &SendMailSettings) -> Result<(), std::io::Error> {
+        let status = Command::new("which")
+            .arg("sendmail")
+            .status()?;
+        if !status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "sendmail not found",
+            ));
+        }
+
+        Ok(())
     }
 
     pub fn add_squadmate(&mut self, squadmate: email::Identity) -> Result<(), &str> {
@@ -174,12 +207,15 @@ impl CivilProtection {
 
         self.config = None;
 
-        fs::remove_file(get_pass_path())?;
+        let pass_path = get_pass_path();
+        if fs::exists(&pass_path)? {
+            fs::remove_file(pass_path)?;
+        }
         fs::remove_file(get_config_path())?;
         return Ok(());
     }
 
-    pub fn create_config(&mut self, identity: email::Identity, password: String) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn create_config_smtp(&mut self, identity: email::Identity, password: String) -> Result<(), Box<dyn std::error::Error>> {
         if self.config.is_some() {
             return Err("Config exists".into());
         }
@@ -187,10 +223,11 @@ impl CivilProtection {
         let settings = get_server_settings_from_address(identity.email.as_str())?;
         self.config = Some(Config {
             email: identity,
-            email_setting: settings,
+            email_setting: email::Settings::SMTP(settings),
             squadmates: vec![],
         });
 
+        // TODO: Need to encrypt password
         let password_encoded = BASE64_STANDARD_NO_PAD.encode(password);
         let path_str = get_pass_path();
         let path = Path::new(&path_str);
@@ -204,11 +241,42 @@ impl CivilProtection {
         return Ok(());
     }
 
+    pub fn create_config_sendmail(&mut self, identity: email::Identity) -> Result<(), Box<dyn std::error::Error>> {
+        if self.config.is_some() {
+            return Err("config exists".into());
+        }
+
+        let settings = SendMailSettings {};
+        self.config = Some(Config {
+            email: identity,
+            email_setting: email::Settings::SENDMAIL(settings),
+            squadmates: vec![],
+        });
+
+        Ok(())
+    }
+
     fn send_email(
         &self,
         message: &email::Message,
         recipient: &email::Identity,
-    ) -> Result<Response, Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let conf = self.check_config()?;
+        return match &conf.email_setting {
+            email::Settings::SMTP(_) => {
+                self.send_email_smtp(message, recipient)
+            },
+            email::Settings::SENDMAIL(_) => {
+                self.send_email_sendmail(message, recipient)
+            },
+        };
+    }
+
+    fn send_email_smtp(
+        &self,
+        message: &email::Message,
+        recipient: &email::Identity,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mailer = self.check_mailer()?;
 
         debug!("Sending email");
@@ -227,7 +295,33 @@ impl CivilProtection {
             .body(message.body.clone())
             .unwrap();
 
-        return Ok(mailer.send(&email)?);
+        mailer.send(&email)?;
+        Ok(())
+    }
+
+    fn send_email_sendmail(
+        &self,
+        message: &email::Message,
+        recipient: &email::Identity,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let subject_line = "subject:".to_owned() + &message.subject + "\n";
+        let from_line = "from:".to_owned() + &message.from.email + "\n";
+
+        let content = subject_line + from_line.as_str() + "\n" + message.body.as_str();
+        let mut sendmail_file = tempfile()?;
+        sendmail_file.write_all(content.as_bytes())?;
+
+        let status = Command::new("sendmail")
+            .arg("-v")
+            .arg(&recipient.email)
+            .stdin(sendmail_file)
+            .status()?;
+
+        if !status.success() {
+            return Err("failed to send email".into());
+        }
+
+        Ok(())
     }
 
     fn check_mailer(&self) -> Result<&SmtpTransport, &str> {
@@ -305,7 +399,7 @@ fn load_config() -> Option<Config> {
     };
 }
 
-fn get_server_settings_from_address(email_address: &str) -> Result<email::Settings, &str> {
+fn get_server_settings_from_address(email_address: &str) -> Result<email::SMTPSettings, &str> {
     return match email_address.split_once("@") {
         Some((_account, domain)) => {
             let server: String;
@@ -341,7 +435,7 @@ fn get_server_settings_from_address(email_address: &str) -> Result<email::Settin
                 }
             }
 
-            Ok(email::Settings { server, encryption })
+            Ok(email::SMTPSettings { server, encryption })
         },
         None => {
             error!("Email address {} is invalid!", email_address);
