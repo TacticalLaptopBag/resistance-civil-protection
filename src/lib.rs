@@ -10,10 +10,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tempfile::tempfile;
 use std::fs::Permissions;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::{env, fs, io};
 use base64::prelude::*;
 
@@ -111,6 +111,8 @@ impl CivilProtection {
     fn login_sendmail(&self, _send_mail_settings: &SendMailSettings) -> Result<(), std::io::Error> {
         let status = Command::new("which")
             .arg("sendmail")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
             .status()?;
         if !status.success() {
             return Err(io::Error::new(
@@ -310,11 +312,14 @@ impl CivilProtection {
         let content = subject_line + from_line.as_str() + "\n" + message.body.as_str();
         let mut sendmail_file = tempfile()?;
         sendmail_file.write_all(content.as_bytes())?;
+        sendmail_file.flush()?;
+        sendmail_file.seek(SeekFrom::Start(0))?;
 
         let status = Command::new("sendmail")
             .arg("-v")
             .arg(&recipient.email)
             .stdin(sendmail_file)
+            .stdout(Stdio::null())
             .status()?;
 
         if !status.success() {
