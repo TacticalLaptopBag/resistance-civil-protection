@@ -1,3 +1,4 @@
+use aes_gcm::{Aes256Gcm, KeyInit};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -35,6 +36,26 @@ pub enum Settings {
 pub struct SMTPSettings {
     pub server: String,
     pub encryption: Encryption,
+    password: String,
+}
+
+impl SMTPSettings {
+    pub fn new(server: String, encryption: Encryption) -> SMTPSettings {
+        SMTPSettings {
+            server, 
+            encryption,
+            password: String::new(),
+        }
+    }
+
+    // TODO: Encrypt and decrypt password
+    pub fn set_password(&mut self, password: &String) {
+        self.password = password.clone();
+    }
+
+    pub fn password(&self) -> &String {
+        &self.password
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
