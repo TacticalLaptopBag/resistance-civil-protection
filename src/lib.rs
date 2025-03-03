@@ -10,6 +10,7 @@ use lettre::{Message, SmtpTransport, Transport};
 use log::debug;
 use regex::Regex;
 use tempfile::tempfile;
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::process::{Command, Stdio};
 use std::io;
@@ -90,6 +91,7 @@ impl CivilProtection {
             return Err("Invalid email format".into());
         }
         conf.squadmates.push(squadmate);
+        conf.save()?;
         return Ok(());
     }
 
@@ -108,6 +110,7 @@ impl CivilProtection {
         }
 
         conf.squadmates.remove(idx);
+        conf.save()?;
         return Ok(true);
     }
 
@@ -157,6 +160,10 @@ impl CivilProtection {
         self.send_email(&message, &conf.squadmates)?;
 
         return Ok(());
+    }
+
+    pub fn does_config_exist(&self) -> bool {
+        Config::exists().unwrap_or(false)
     }
 
     pub fn delete_config(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -224,21 +231,28 @@ impl CivilProtection {
         recipients: &[email::Identity],
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: Lettre has a Sendmail transport, look into that
-        let subject_line = "subject:".to_owned() + &message.subject + "\n";
-        let from_line = "from:".to_owned() + &message.from.email + "\n";
+        let subject_line = "subject:".to_owned() + &message.subject.trim() + "\n";
+        let from_line = "from:".to_owned() + &message.from.email.trim() + "\n";
+        let mut to_line = "to:".to_owned();
+        for (i, recipient) in recipients.iter().enumerate() {
+            if i == recipients.len() - 1 {
+                to_line = to_line + &recipient.email.trim() + "\n";
+            } else {
+                to_line = to_line + &recipient.email.trim() + ", ";
+            }
+        }
 
-        let content = subject_line + from_line.as_str() + "\n" + message.body.as_str();
-        let mut sendmail_file = tempfile()?;
+        let content = subject_line + from_line.as_str() + to_line.as_str() + "\n" + message.body.as_str();
+        // let mut sendmail_file = tempfile()?;
+        let mut sendmail_file = File::create_new("/home/stephen/dev/resistance/email.txt")?;
         sendmail_file.write_all(content.as_bytes())?;
         sendmail_file.flush()?;
         sendmail_file.seek(SeekFrom::Start(0))?;
 
-        let mut cmd = Command::new("sendmail");
-        cmd.arg("-v");
-        for recipient in recipients {
-            cmd.arg(&recipient.email);
-        }
-        let status = cmd.stdin(sendmail_file)
+        let status = Command::new("sendmail")
+            .arg("-v")
+            .arg("-t")
+            .stdin(sendmail_file)
             .stdout(Stdio::null())
             .status()?;
 

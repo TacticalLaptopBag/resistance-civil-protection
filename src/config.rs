@@ -27,6 +27,13 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn exists() -> std::io::Result<bool> {
+        match fs::exists(get_config_path()) {
+            Ok(result) => Ok(result),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let config_path_str = get_config_path();
         let config_path = Path::new(config_path_str.as_str());
