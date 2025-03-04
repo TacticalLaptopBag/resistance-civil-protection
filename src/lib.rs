@@ -4,31 +4,27 @@ mod cons;
 mod crypt;
 
 use email::{SMTPSettings, SendMailSettings};
-use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::{Message, SmtpTransport, Transport};
+use lettre::{SendmailTransport, SmtpTransport, Transport};
 use log::debug;
 use regex::Regex;
-use tempfile::tempfile;
-use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
 use std::process::{Command, Stdio};
 use std::io;
 use config::Config;
 
 pub struct CivilProtection {
-    mailer: Option<SmtpTransport>,
+    smtp_transport: Option<SmtpTransport>,
 }
 
 impl CivilProtection {
     pub fn new() -> CivilProtection {
         return CivilProtection {
-            mailer: None,
+            smtp_transport: None,
         };
     }
 
     pub fn is_logged_in(&self) -> bool {
-        return self.mailer.is_some();
+        return self.smtp_transport.is_some();
     }
 
     pub fn login(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -37,7 +33,7 @@ impl CivilProtection {
         return match &conf.email_setting {
             email::Settings::SMTP(smtp_settings) => {
                 let mailer = self.login_smtp(smtp_settings, &conf.email.email)?;
-                self.mailer = Some(mailer);
+                self.smtp_transport = Some(mailer);
                 Ok(())
             },
             email::Settings::SENDMAIL(send_mail_settings) => {
@@ -118,7 +114,7 @@ impl CivilProtection {
         let conf = self.config()?;
         let mut idx = 0;
         for squadmate in &conf.squadmates {
-            if squadmate.email == email {
+            if squadmate.email.contains(email) {
                 break;
             }
             idx += 1;
@@ -135,7 +131,7 @@ impl CivilProtection {
         let conf = self.config()?;
         let mut idx = 0;
         for squadmate in &conf.squadmates {
-            if squadmate.name == name {
+            if squadmate.name.contains(name) {
                 break;
             }
             idx += 1;
@@ -204,23 +200,8 @@ impl CivilProtection {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mailer = self.check_mailer()?;
 
-        debug!("Sending email");
-        let mut email_builder = Message::builder();
-        email_builder = email_builder
-            .from(
-                format!("{} <{}>", message.from.name, message.from.email)
-                    .parse()?,
-            )
-            .subject(message.subject.as_str())
-            // This could be TEXT_HTML
-            .header(ContentType::TEXT_PLAIN);
-        for recipient in recipients {
-            email_builder = email_builder.to(
-                format!("{} <{}>", recipient.name, recipient.email).parse()?
-            );
-        }
-        let email = email_builder.body(message.body.clone())?;
-
+        debug!("Sending SMTP email");
+        let email = message.to_lettre(recipients);
         mailer.send(&email)?;
         Ok(())
     }
@@ -230,47 +211,22 @@ impl CivilProtection {
         message: &email::Message,
         recipients: &[email::Identity],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // TODO: Lettre has a Sendmail transport, look into that
-        let subject_line = "subject:".to_owned() + &message.subject.trim() + "\n";
-        let from_line = "from:".to_owned() + &message.from.email.trim() + "\n";
-        let mut to_line = "to:".to_owned();
-        for (i, recipient) in recipients.iter().enumerate() {
-            if i == recipients.len() - 1 {
-                to_line = to_line + &recipient.email.trim() + "\n";
-            } else {
-                to_line = to_line + &recipient.email.trim() + ", ";
-            }
-        }
+        debug!("Sending sendmail email");
 
-        let content = subject_line + from_line.as_str() + to_line.as_str() + "\n" + message.body.as_str();
-        // let mut sendmail_file = tempfile()?;
-        let mut sendmail_file = File::create_new("/home/stephen/dev/resistance/email.txt")?;
-        sendmail_file.write_all(content.as_bytes())?;
-        sendmail_file.flush()?;
-        sendmail_file.seek(SeekFrom::Start(0))?;
-
-        let status = Command::new("sendmail")
-            .arg("-v")
-            .arg("-t")
-            .stdin(sendmail_file)
-            .stdout(Stdio::null())
-            .status()?;
-
-        if !status.success() {
-            return Err("failed to send email".into());
-        }
-
+        let email = message.to_lettre(recipients);
+        let sender = SendmailTransport::new();
+        sender.send(&email)?;
         Ok(())
     }
 
     fn check_mailer(&self) -> Result<&SmtpTransport, &str> {
-        return match &self.mailer {
+        return match &self.smtp_transport {
             Some(mailer) => Ok(mailer),
             None => Err("Not logged in"),
         };
     }
 
-    fn config(&self) -> Result<Config, Box<dyn std::error::Error>> {
+    pub fn config(&self) -> Result<Config, Box<dyn std::error::Error>> {
         return match Config::load() {
             Ok(config) => Ok(config),
             Err(_) => Err("Failed to load config".into()),
