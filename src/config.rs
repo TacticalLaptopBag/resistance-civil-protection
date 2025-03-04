@@ -85,8 +85,8 @@ impl Config {
 
     pub fn delete() -> Result<(), Box<dyn std::error::Error>> {
         let config_path = get_config_path();
-        if fs::exists(&config_path)? {
-            return Err("Config already deleted".into());
+        if !fs::exists(&config_path)? {
+            return Ok(());
         }
 
         fs::remove_file(&config_path)?;
