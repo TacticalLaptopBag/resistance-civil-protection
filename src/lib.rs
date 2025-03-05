@@ -13,39 +13,30 @@ use std::io;
 use config::Config;
 
 pub struct CivilProtection {
-    smtp_transport: Option<SmtpTransport>,
 }
 
 impl CivilProtection {
     pub fn new() -> CivilProtection {
         return CivilProtection {
-            smtp_transport: None,
         };
-    }
-
-    pub fn is_logged_in(&self) -> bool {
-        return self.smtp_transport.is_some();
     }
 
     pub fn login(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let conf = self.config()?;
         
-        return match &conf.email_setting {
+        match &conf.email_setting {
             email::Settings::SMTP(smtp_settings) => {
-                let mailer = self.login_smtp(smtp_settings, &conf.email.email)?;
-                self.smtp_transport = Some(mailer);
-                Ok(())
+                self.login_smtp(smtp_settings, &conf.email.email)?;
             },
             email::Settings::SENDMAIL(send_mail_settings) => {
                 self.login_sendmail(send_mail_settings)?;
-                Ok(())
             },
         }
+        Ok(())
     }
 
     fn login_smtp(&self, smtp_settings: &SMTPSettings, email: &String) -> Result<SmtpTransport, Box<dyn std::error::Error>> {
-        // TODO: Need to decrypt password
-        let password = smtp_settings.password();
+        let password = smtp_settings.password()?;
 
         let credentials = Credentials::new(
             email.to_owned(),
@@ -146,6 +137,10 @@ impl CivilProtection {
 
     pub fn notify_squadmates(&self) -> Result<(), Box<dyn std::error::Error>> {
         let conf = self.config()?;
+
+        if conf.squadmates.is_empty() {
+            return Err("No squadmates to notify".into());
+        }
         
         let message = email::Message {
             from: conf.email.clone(),
@@ -184,8 +179,8 @@ impl CivilProtection {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let conf = self.config()?;
         return match &conf.email_setting {
-            email::Settings::SMTP(_) => {
-                self.send_email_smtp(message, recipients)
+            email::Settings::SMTP(smtp_settings) => {
+                self.send_email_smtp(message, recipients, smtp_settings)
             },
             email::Settings::SENDMAIL(_) => {
                 self.send_email_sendmail(message, recipients)
@@ -197,10 +192,11 @@ impl CivilProtection {
         &self,
         message: &email::Message,
         recipients: &[email::Identity],
+        smtp_settings: &SMTPSettings,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mailer = self.check_mailer()?;
-
         debug!("Sending SMTP email");
+
+        let mailer = self.login_smtp(smtp_settings, &message.from.email)?;
         let email = message.to_lettre(recipients);
         mailer.send(&email)?;
         Ok(())
@@ -217,13 +213,6 @@ impl CivilProtection {
         let sender = SendmailTransport::new();
         sender.send(&email)?;
         Ok(())
-    }
-
-    fn check_mailer(&self) -> Result<&SmtpTransport, &str> {
-        return match &self.smtp_transport {
-            Some(mailer) => Ok(mailer),
-            None => Err("Not logged in"),
-        };
     }
 
     pub fn config(&self) -> Result<Config, Box<dyn std::error::Error>> {

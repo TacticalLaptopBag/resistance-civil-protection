@@ -8,7 +8,6 @@ aes-gcm = "0.10.3"
 base64 = "0.22.1"
 bson = "2.13.0"
 lettre = { version = "0.11.11", features = ["sendmail-transport"] }
-linux-keyutils = "0.2.4"
 log = "0.4.22"
 regex = "1.11.1"
 serde = "1.0.216"

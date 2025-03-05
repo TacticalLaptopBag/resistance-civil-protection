@@ -1,8 +1,18 @@
-use std::fmt::Display;
+use std::{env, fmt::Display, fs, os::unix::fs::PermissionsExt};
 
-use aes_gcm::{Aes256Gcm, KeyInit};
+use aes_gcm::{aead::OsRng, Aes256Gcm, KeyInit};
 use lettre::message::header::ContentType;
 use serde::{Deserialize, Serialize};
+
+use crate::{cons, crypt::{self, decrypt}};
+
+fn get_pass_path() -> String {
+    if env::var("RESISTANCE_DEBUG").is_ok() {
+        return "./resistance-conf/civil-protection.secret".into();
+    }
+
+    return cons::PASS_PATH.into();
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Identity {
@@ -98,13 +108,32 @@ impl SMTPSettings {
         }
     }
 
-    // TODO: Encrypt and decrypt password
-    pub fn set_password(&mut self, password: &String) {
-        self.password = password.clone();
+    pub fn set_password(&mut self, password: &String) -> Result<(), Box<dyn std::error::Error>> {
+        let pass_path = get_pass_path();
+        let key = match fs::read(&pass_path) {
+            Ok(key) => key,
+            Err(_) => {
+                let new_key = Aes256Gcm::generate_key(OsRng);
+                fs::write(&pass_path, new_key)?;
+                let perms = fs::Permissions::from_mode(0o600);
+                fs::set_permissions(&pass_path, perms)?;
+                new_key.to_vec()
+            },
+        };
+
+        let encrypted_pass = crypt::encrypt(&key, password.as_bytes());
+        self.password = encrypted_pass;
+        Ok(())
     }
 
-    pub fn password(&self) -> &String {
-        &self.password
+    pub fn password(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let key = match fs::read(get_pass_path()) {
+            Ok(key) => key,
+            Err(_) => return Err("failed to load password".into()),
+        };
+        let decrypted_pass = decrypt(&key, &self.password);
+        let decrypted_pass_str = String::from_utf8(decrypted_pass)?;
+        Ok(decrypted_pass_str)
     }
 }
 

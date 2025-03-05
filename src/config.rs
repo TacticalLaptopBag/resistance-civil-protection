@@ -100,7 +100,7 @@ impl Config {
         }
 
         let mut settings = get_server_settings_from_address(identity.email.as_str())?;
-        settings.set_password(&password);
+        settings.set_password(&password)?;
         let config = Config {
             email: identity,
             email_setting: email::Settings::SMTP(settings),
